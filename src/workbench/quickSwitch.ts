@@ -8,7 +8,7 @@ import { editorPrefs } from "@/platform/editorSettings";
 import { PRESET_TITLES, useKeymap } from "@/platform/keymap";
 import { useProject } from "@/platform/project";
 import type { MenuItem } from "@/ui";
-import { themeChoices } from "@/platform/themes";
+import { themeGroups } from "@/platform/themes";
 import { currentThemeChoice, setTheme } from "./theme";
 
 async function setGlobal(key: string, value: unknown, what: string) {
@@ -22,15 +22,19 @@ async function setGlobal(key: string, value: unknown, what: string) {
 
 export const selectKeymap = (id: string) => setGlobal("keymap", id, "keymap");
 
+/** The built-in themes, then each plugin's, a separator between them (as IDEA's Theme list). */
 export function themeItems(themeId: string = currentThemeChoice()): MenuItem[] {
-  return themeChoices().map<MenuItem>((c) => ({
-    id: `theme.${c.id}`,
-    label: c.label,
-    // Plugin themes keep their own names.
-    verbatim: !!c.origin,
-    checked: c.id === themeId,
-    run: () => void setTheme(c.id),
-  }));
+  return themeGroups().flatMap<MenuItem>((group, i) => [
+    ...(i > 0 ? [{ kind: "separator" as const }] : []),
+    ...group.themes.map<MenuItem>((c) => ({
+      id: `theme.${c.id}`,
+      label: c.label,
+      // Plugin themes keep their own names.
+      verbatim: !!c.origin,
+      checked: c.id === themeId,
+      run: () => void setTheme(c.id),
+    })),
+  ]);
 }
 
 export function keymapItems(keymapId: string, customKeymaps: string[]): MenuItem[] {

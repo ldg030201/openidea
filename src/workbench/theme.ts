@@ -244,12 +244,18 @@ export function originDetail(t: { label: string; origin?: string }): string | un
  * Options for a theme picker: built-in themes, then plugins' (with the plugin
  * named beside them). A selected plugin theme whose plugin is off stays listed.
  */
+/** The themes for a picker: each plugin's under a heading with its name (`choices` in `themeGroups` order). */
 export function themeSelectOptions(choices: readonly ThemeChoice[], selected?: string): SelectOption<ThemeChoiceId>[] {
-  const options: SelectOption<ThemeChoiceId>[] = choices.map((c) => ({
-    value: c.id,
-    label: c.label,
-    detail: originDetail(c),
-  }));
+  const options: SelectOption<ThemeChoiceId>[] = [];
+  let group: string | undefined;
+  for (const c of choices) {
+    const pluginId = parsePluginThemeRef(c.id)?.pluginId;
+    if (pluginId && pluginId !== group)
+      options.push({ value: `plugin:${pluginId}`, label: c.origin ?? pluginId, section: true });
+    group = pluginId;
+    // Under its plugin's heading a theme needs no origin.
+    options.push({ value: c.id, label: c.label });
+  }
   const missing = parsePluginThemeRef(selected);
   if (missing && !options.some((o) => o.value === selected))
     options.push({ value: selected as ThemeChoiceId, label: missing.themeId, detail: "Plugin not enabled" });

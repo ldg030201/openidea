@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { InstalledIntellijTheme, InstallPreview, IntellijThemeSource } from "@/bindings";
 import { IpcError } from "@/platform/ipc";
@@ -151,7 +151,7 @@ describe("IntelliJ theme import", () => {
 });
 
 describe("Import Theme from IntelliJ IDE", () => {
-  it("lists the installed themes, the one in use first, and imports the chosen one", async () => {
+  it("lists the installed themes by plugin, the one in use first, and imports the chosen one", async () => {
     const user = userEvent.setup();
     const onImported = vi.fn();
     render(<IntellijThemesDialogHost />);
@@ -162,6 +162,10 @@ describe("Import Theme from IntelliJ IDE", () => {
       expect(found).toHaveLength(2);
       return found;
     });
+    // Both under their plugin's heading: importing one brings the plugin's every theme.
+    expect(within(list).getByText("Deep Sea Themes")).toBeInTheDocument();
+    expect(within(list).getByText("2 themes")).toBeInTheDocument();
+    expect(within(list).getByText("IntelliJ IDEA 2025.2")).toBeInTheDocument();
     expect(options[0]).toHaveTextContent("Shallow");
     expect(options[0]).toHaveTextContent("In use");
     expect(options[1]).toHaveTextContent("Deep Sea");
