@@ -8,13 +8,15 @@ import { _setActiveEditor } from "@/editor/api";
 import { executeAction, executeActionFrom, getAction, registerAction } from "@/platform/actions";
 import { useProject } from "@/platform/project";
 import { provideNotificationService, type NotificationService } from "@/workbench/contributions";
-import { applyThemeAttributes, useThemeOverride } from "@/workbench/theme";
+import { applyThemeAttributes, previewTheme, useThemeOverride } from "@/workbench/theme";
+import { pluginThemeRef } from "@/platform/themes";
 import { createMemoryPluginsBackend, sampleCatalog, setPluginsBackend, type PluginsBackend } from "../backend";
 import {
   applyPluginTheme,
   followThemeSetting,
   PLUGIN_THEME_STYLE_ID,
   handlePluginEvent,
+  providePluginThemePreviews,
   pluginActionId,
   startPluginBridge,
   syncProjection,
@@ -385,6 +387,36 @@ describe("bridge events", () => {
     expect([root.dataset.theme, root.dataset.contrast]).toEqual(["dark", "high"]);
     expect(root.dataset.pluginThemeKind).toBeUndefined();
     useThemeOverride.setState({ theme: null });
+  });
+
+  it("previews a live plugin's theme in this window without selecting it", () => {
+    const root = document.documentElement;
+    const sheet = () => document.getElementById(PLUGIN_THEME_STYLE_ID)?.textContent ?? null;
+    const setTheme = vi.spyOn(backend, "setTheme");
+    const night = { id: "night", name: "Night", kind: "dark", tokens: { "--bg-app": "#101820" } };
+    const dawn = { id: "dawn", name: "Dawn", kind: "light" as const, tokens: { "--bg-app": "#fff8e7" } };
+    usePlugins.setState({
+      ui: [{ pluginId: "acme", point: "themes", key: "night", decl: night }],
+      activeTheme: { pluginId: "acme", theme: dawn },
+    });
+    applyPluginTheme(usePlugins.getState().activeTheme);
+    const stop = providePluginThemePreviews();
+
+    previewTheme(pluginThemeRef("acme", "night"));
+    expect(sheet()).toContain("--bg-app: #101820;");
+    expect([root.dataset.pluginTheme, root.dataset.theme]).toEqual(["acme/night", "dark"]);
+    // A built-in theme shows without the plugin's tokens.
+    previewTheme("solarized-light");
+    expect(sheet()).toBeNull();
+    expect([root.dataset.theme, root.dataset.colorTheme]).toEqual(["light", "solarized-light"]);
+    // Back to the selected one; nothing was selected on the way.
+    previewTheme(null);
+    expect(sheet()).toContain("--bg-app: #fff8e7;");
+    expect(root.dataset.pluginTheme).toBe("acme/dawn");
+    expect(setTheme).not.toHaveBeenCalled();
+
+    stop();
+    applyPluginTheme(null);
   });
 
   it("runs commands with the focused editor's path, language and UTF-16 selections", async () => {

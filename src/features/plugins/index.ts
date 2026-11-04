@@ -19,7 +19,13 @@ import { lazyComponent } from "@/ui";
 import { executeAction, registerActions } from "@/platform/actions";
 import { useProject } from "@/platform/project";
 import { editorService, registerOverlay, registerSettingsPage } from "@/workbench/contributions";
-import { followPluginChanges, startPluginBridge, syncProjection, trackPluginTheme } from "./bridge";
+import {
+  followPluginChanges,
+  providePluginThemePreviews,
+  startPluginBridge,
+  syncProjection,
+  trackPluginTheme,
+} from "./bridge";
 import { ConsentDialogHost, provideConsentDialog } from "./consent";
 import { trackIconTheme } from "./iconThemes";
 import { pluginLineMarkerGutter } from "./lineMarkerGutter";
@@ -63,6 +69,7 @@ export function activate(): () => void {
     registerOverlay({ id: "plugins.consent", component: ConsentDialogHost }),
     registerOverlay({ id: "plugins.intellijThemes", component: IntellijThemesDialogHost }),
     provideConsentDialog(),
+    providePluginThemePreviews(),
     registerActions([
       {
         id: "plugins.settings",

@@ -6,8 +6,10 @@ import { call, commands, isTauri } from "@/platform/ipc";
 import { useProject } from "@/platform/project";
 import {
   baseTheme,
+  isBuiltinTheme,
   isThemeChoiceId,
   parsePluginThemeRef,
+  previewPluginTheme,
   themeChoices,
   themeKind,
   useContributedThemes,
@@ -229,6 +231,24 @@ export async function setTheme(next: ThemeSetting) {
   } catch {
     /* keep the session override */
   }
+}
+
+/**
+ * Shows `id` in this window without selecting it (Quick Switch's instant
+ * theme switch); `null` shows the selected theme again. Nothing is saved and
+ * other windows keep theirs.
+ */
+export function previewTheme(id: ThemeChoiceId | null) {
+  if (id === null) {
+    previewPluginTheme("selected");
+    applyThemeAttributes(currentThemeId());
+  } else if (isBuiltinTheme(id)) {
+    previewPluginTheme(null);
+    applyThemeAttributes(id);
+  } else {
+    previewPluginTheme(id);
+  }
+  syncWindowBackground();
 }
 
 export async function toggleTheme() {

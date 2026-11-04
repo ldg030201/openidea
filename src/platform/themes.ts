@@ -112,6 +112,25 @@ export function themeChoices(
   return themeGroups(contributed).flatMap((g) => g.themes);
 }
 
+/**
+ * Shows a plugin theme in this window without selecting it, `null` none, or
+ * `"selected"` the one selected again. The plugins feature provides it.
+ */
+export type PluginThemePreview = (theme: PluginThemeRef | null | "selected") => void;
+
+let pluginThemePreview: PluginThemePreview | null = null;
+
+export function providePluginThemePreview(preview: PluginThemePreview): () => void {
+  pluginThemePreview = preview;
+  return () => {
+    if (pluginThemePreview === preview) pluginThemePreview = null;
+  };
+}
+
+export function previewPluginTheme(theme: PluginThemeRef | null | "selected"): void {
+  pluginThemePreview?.(theme);
+}
+
 /** Whether `id` can be applied now (a contributed theme's plugin may be off). */
 export function isThemeAvailable(id: ThemeChoiceId): boolean {
   return isBuiltinTheme(id) || useContributedThemes.getState().themes.some((t) => t.id === id);
