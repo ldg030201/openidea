@@ -5,6 +5,8 @@
  * projected by `projection.ts` / `points.tsx`.
  *
  * Actions: `plugins.settings`, `plugins.installFromDisk`, `plugins.reloadAll`,
+ * `plugins.importIntellijTheme` (a theme plugin file; `arg`: its path),
+ * `plugins.importInstalledIntellijTheme` (from the JetBrains IDEs on this machine),
  * plus one action per plugin command: `plugin.<pluginId>.<commandId>`
  * (searchable in Search Everywhere › Actions and bindable in the keymap editor;
  * a string arg is forwarded to the plugin).
@@ -23,6 +25,8 @@ import { trackIconTheme } from "./iconThemes";
 import { pluginLineMarkerGutter } from "./lineMarkerGutter";
 import { defineBuiltinUiPoints } from "./points";
 import { startViewUi } from "./uiPoints";
+import { importIntellijTheme, showInstalledIntellijThemes } from "./intellijImport";
+import { IntellijThemesDialogHost } from "./IntellijThemesDialog";
 import { installFromDisk, refreshPlugins, reloadPlugin, SETTINGS_PAGE_ID, usePlugins } from "./store";
 
 function registerPluginsPage(): () => void {
@@ -41,6 +45,7 @@ export function activateSettingsPages(): () => void {
   const disposers = [
     registerPluginsPage(),
     registerOverlay({ id: "plugins.consent", component: ConsentDialogHost }),
+    registerOverlay({ id: "plugins.intellijThemes", component: IntellijThemesDialogHost }),
     provideConsentDialog(),
     defineBuiltinUiPoints(),
     followPluginChanges(),
@@ -56,6 +61,7 @@ export function activate(): () => void {
   const disposers = [
     registerPluginsPage(),
     registerOverlay({ id: "plugins.consent", component: ConsentDialogHost }),
+    registerOverlay({ id: "plugins.intellijThemes", component: IntellijThemesDialogHost }),
     provideConsentDialog(),
     registerActions([
       {
@@ -75,6 +81,24 @@ export function activate(): () => void {
         run: async ({ arg }) => {
           await installFromDisk(typeof arg === "string" ? arg : undefined);
         },
+      },
+      {
+        id: "plugins.importIntellijTheme",
+        title: "Import IntelliJ Theme from File…",
+        category: "Plugins",
+        icon: "plugin",
+        keywords: ["intellij", "jetbrains", "theme", "jar", "theme.json", "color scheme"],
+        run: async ({ arg }) => {
+          await importIntellijTheme(typeof arg === "string" ? arg : undefined);
+        },
+      },
+      {
+        id: "plugins.importInstalledIntellijTheme",
+        title: "Import Theme from IntelliJ IDE…",
+        category: "Plugins",
+        icon: "plugin",
+        keywords: ["intellij", "jetbrains", "theme", "color scheme", "migrate"],
+        run: () => showInstalledIntellijThemes(),
       },
       {
         id: "plugins.reloadAll",
