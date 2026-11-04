@@ -185,7 +185,7 @@ impl PluginHost {
     }
 
     /// Writes a package the UI generated (an imported IntelliJ theme) into a
-    /// folder next to the downloads, named after `name`; returns the folder.
+    /// folder next to the downloads, named after `name` (its plugin id); returns the folder.
     /// The install page validates it like any other package.
     pub fn stage_package(&self, name: &str, files: &[PackageFile]) -> IdeResult<PathBuf> {
         ide_extension::validate_item_id(name, "package name").map_err(IdeError::invalid)?;
@@ -210,7 +210,8 @@ impl PluginHost {
                 return Err(IdeError::invalid(format!("{} is in the package twice", f.path)));
             }
         }
-        let dir = self.plugins_dir.join(DOWNLOADS).join(format!("{name}-generated-{}", std::process::id()));
+        // One folder per package, replaced by the next import of it: they don't pile up.
+        let dir = self.plugins_dir.join(DOWNLOADS).join(format!("{name}-generated"));
         let _ = std::fs::remove_dir_all(&dir);
         for f in files {
             let path = dir.join(&f.path);

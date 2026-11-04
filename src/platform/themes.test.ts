@@ -121,7 +121,24 @@ describe("plugin themes", () => {
     expect(isThemeAvailable(ref)).toBe(false);
     // Its plugin off: the base of the kind it had shows, and the pickers keep it listed.
     expect(resolveThemeId(a, false)).toBe("dark");
-    expect(themeSelectOptions(themeChoices(), ref).at(-1)).toMatchObject({ value: ref, label: "night" });
+    expect(themeSelectOptions(themeChoices(), ref).slice(-2)).toMatchObject([
+      { value: "plugin:acme.night", label: "acme.night", section: true },
+      { value: ref, label: "night", detail: "Plugin not enabled" },
+    ]);
+    // Its plugin live but the theme gone (an update dropped it): listed under that plugin's heading.
+    const stay = addContributedTheme({
+      id: pluginThemeRef("acme.night", "dawn"),
+      label: "Dawn",
+      kind: "dark",
+      origin: "Acme",
+    });
+    addContributedTheme({ id: pluginThemeRef("zeta.blue", "blue"), label: "Blue", kind: "dark", origin: "Zeta" });
+    expect(
+      themeSelectOptions(themeChoices(), ref)
+        .slice(BUILTIN_THEMES.length)
+        .map((o) => (o.section ? `[${o.label}]` : o.label)),
+    ).toEqual(["[Acme]", "Dawn", "night", "[Zeta]", "Blue"]);
+    stay();
   });
 
   it("are grouped by plugin: the built-in ones first, then each plugin's by name", () => {

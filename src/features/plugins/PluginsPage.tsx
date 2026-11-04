@@ -43,6 +43,7 @@ import {
   uninstallPlugin,
   usePlugins,
 } from "./store";
+import { useProject } from "@/platform/project";
 import { importIntellijTheme, showInstalledIntellijThemes } from "./intellijImport";
 import styles from "./PluginsPage.module.css";
 import { tx } from "@/platform/i18n";
@@ -528,6 +529,8 @@ function CatalogDetails({ entry }: { entry: CatalogPlugin }) {
 }
 
 interface GearActions {
+  /** Installing needs a trusted project's window (the host refuses it elsewhere). */
+  canImport: boolean;
   install: (packageFile: boolean) => void;
   importIntellijFile: () => void;
   importInstalledIntellij: () => void;
@@ -538,9 +541,13 @@ function gearMenu(plugins: readonly PluginInfo[], actions: GearActions): MenuIte
   return [
     { label: "Install Plugin from Disk…", icon: "package", run: () => actions.install(false) },
     { label: "Install Plugin from Package File…", run: () => actions.install(true) },
-    { kind: "separator" },
-    { label: "Import Theme from IntelliJ IDE…", run: actions.importInstalledIntellij },
-    { label: "Import IntelliJ Theme from File…", run: actions.importIntellijFile },
+    ...(actions.canImport
+      ? [
+          { kind: "separator" as const },
+          { label: "Import Theme from IntelliJ IDE…", run: actions.importInstalledIntellij },
+          { label: "Import IntelliJ Theme from File…", run: actions.importIntellijFile },
+        ]
+      : []),
     { kind: "separator" },
     {
       label: "Disable All Downloaded Plugins",
@@ -721,6 +728,7 @@ export function PluginsPage() {
     showContextMenu(
       { x: r.left, y: r.bottom + 2 },
       gearMenu(plugins, {
+        canImport: useProject.getState().project?.trusted === true,
         install: (packageFile) => void installFromDisk(undefined, packageFile).then(showInstalled),
         importIntellijFile: () => void importIntellijTheme().then(showInstalled),
         importInstalledIntellij: () => showInstalledIntellijThemes(showInstalled),

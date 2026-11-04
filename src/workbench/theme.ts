@@ -183,7 +183,7 @@ export function rememberStartupTheme(root: HTMLElement = document.documentElemen
  * for the next window's start-up.
  */
 export function syncWindowBackground() {
-  rememberStartupTheme();
+  if (!previewing) rememberStartupTheme();
   if (!isTauri()) return;
   const color = windowBackgroundColor();
   if (!color) return;
@@ -233,12 +233,16 @@ export async function setTheme(next: ThemeSetting) {
   }
 }
 
+/** A previewed theme is not the next start-up's (`rememberStartupTheme`). */
+let previewing = false;
+
 /**
  * Shows `id` in this window without selecting it (Quick Switch's instant
  * theme switch); `null` shows the selected theme again. Nothing is saved and
  * other windows keep theirs.
  */
 export function previewTheme(id: ThemeChoiceId | null) {
+  previewing = id !== null;
   if (id === null) {
     previewPluginTheme("selected");
     applyThemeAttributes(currentThemeId());
@@ -277,7 +281,17 @@ export function themeSelectOptions(choices: readonly ThemeChoice[], selected?: s
     options.push({ value: c.id, label: c.label });
   }
   const missing = parsePluginThemeRef(selected);
-  if (missing && !options.some((o) => o.value === selected))
-    options.push({ value: selected as ThemeChoiceId, label: missing.themeId, detail: "Plugin not enabled" });
+  if (missing && !options.some((o) => o.value === selected)) {
+    // Under its own plugin's heading, not the last one listed.
+    const option = { value: selected as ThemeChoiceId, label: missing.themeId, detail: "Plugin not enabled" };
+    const heading = options.findIndex((o) => o.section && o.value === `plugin:${missing.pluginId}`);
+    if (heading < 0)
+      options.push({ value: `plugin:${missing.pluginId}`, label: missing.pluginId, section: true }, option);
+    else {
+      let end = heading + 1;
+      while (end < options.length && !options[end]!.section) end++;
+      options.splice(end, 0, option);
+    }
+  }
   return options;
 }

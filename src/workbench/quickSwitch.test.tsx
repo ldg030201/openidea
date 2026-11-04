@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { ContextMenuHost, hideContextMenu, MenuList } from "@/ui";
 import { showQuickSwitch, THEME_PREVIEW_DELAY, themePreview } from "./quickSwitch";
-import { applyThemeAttributes, currentThemeId, useThemeOverride } from "./theme";
+import {
+  applyThemeAttributes,
+  currentThemeId,
+  STARTUP_THEME_KEY,
+  syncWindowBackground,
+  useThemeOverride,
+} from "./theme";
 
 const root = document.documentElement;
 const shown = () => [root.dataset.theme, root.dataset.colorTheme ?? null];
@@ -35,6 +41,8 @@ describe("menu items", () => {
 
 describe("Quick Switch theme preview", () => {
   it("shows the active theme after a moment, in this window only, and takes it back", () => {
+    syncWindowBackground();
+    const startup = localStorage.getItem(STARTUP_THEME_KEY);
     const before = shown();
     const preview = themePreview();
     preview.preview("solarized-dark");
@@ -46,11 +54,13 @@ describe("Quick Switch theme preview", () => {
     expect(shown()).toEqual(before);
     vi.advanceTimersByTime(1);
     expect(shown()).toEqual(["light", "one-light"]);
-    // Nothing is selected or saved.
+    // Nothing is selected or saved, not even as the next start-up's theme.
     expect(useThemeOverride.getState().theme).toBeNull();
+    expect(localStorage.getItem(STARTUP_THEME_KEY)).toBe(startup);
 
     preview.restore();
     expect(shown()).toEqual(before);
+    expect(localStorage.getItem(STARTUP_THEME_KEY)).toBe(startup);
     preview.preview("solarized-dark");
     vi.advanceTimersByTime(THEME_PREVIEW_DELAY);
     preview.end();

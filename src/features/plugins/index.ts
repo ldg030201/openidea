@@ -95,6 +95,8 @@ export function activate(): () => void {
         category: "Plugins",
         icon: "plugin",
         keywords: ["intellij", "jetbrains", "theme", "jar", "theme.json", "color scheme"],
+        // Installing needs a project's window.
+        when: "projectOpen",
         run: async ({ arg }) => {
           await importIntellijTheme(typeof arg === "string" ? arg : undefined);
         },
@@ -105,6 +107,7 @@ export function activate(): () => void {
         category: "Plugins",
         icon: "plugin",
         keywords: ["intellij", "jetbrains", "theme", "color scheme", "migrate"],
+        when: "projectOpen",
         run: () => showInstalledIntellijThemes(),
       },
       {

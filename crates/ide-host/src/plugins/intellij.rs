@@ -23,6 +23,10 @@ const MAX_FILE: u64 = 4 << 20;
 const MAX_JAR: u64 = 64 << 20;
 /// Jars of one plugin looked into.
 const MAX_JARS: usize = 64;
+/// All the jars read into memory from one Marketplace zip.
+const MAX_NESTED: u64 = 256 << 20;
+/// Descriptors read for one plugin: `plugin.xml` and those it includes.
+const MAX_DESCRIPTORS: usize = 64;
 const PLUGIN_XML: &str = "META-INF/plugin.xml";
 
 /// A theme plugin's themes, as read from its files.
@@ -117,9 +121,9 @@ fn read(path: &Path) -> Result<IntellijThemeSource, String> {
 
 fn plugin_theme(jars: &mut [Jar], id: &str, path: &str) -> Result<IntellijThemeFile, String> {
     let bytes = find(jars, entry_name(path), MAX_FILE)?.ok_or_else(|| format!("{path} is missing from the plugin"))?;
-    let theme = theme_json(&bytes).map_err(|e| format!("{path}: {e}"))?;
-    let editor_scheme = match editor_scheme_ref(&theme) {
-        Some(scheme) => find(jars, entry_name(&scheme), MAX_FILE)?.map(|b| text(&b)),
+    let (theme, fields) = theme_json(&bytes).map_err(|e| format!("{path}: {e}"))?;
+    let editor_scheme = match string_field(&fields, "editorScheme") {
+        Some(scheme) => find(jars, entry_name(scheme), MAX_FILE)?.map(|b| text(&b)),
         None => None,
     };
     Ok(IntellijThemeFile { id: id.to_owned(), theme, editor_scheme })
@@ -127,38 +131,42 @@ fn plugin_theme(jars: &mut [Jar], id: &str, path: &str) -> Result<IntellijThemeF
 
 /// A `.theme.json` with the editor scheme beside it (its `editorScheme` names a path in the plugin's jar).
 fn loose_theme(path: &Path) -> Result<IntellijThemeSource, String> {
-    let theme = theme_json(&read_file(path)?).map_err(|e| format!("{}: {e}", path.display()))?;
-    let editor_scheme = editor_scheme_ref(&theme)
-        .and_then(|p| Path::new(&p).file_name().map(|n| path.with_file_name(n)))
+    let (theme, fields) = theme_json(&read_file(path)?).map_err(|e| format!("{}: {e}", path.display()))?;
+    // Any JSON object parses: an IntelliJ theme has UI colours or an editor scheme.
+    let scheme_ref = string_field(&fields, "editorScheme");
+    if !fields.get("ui").is_some_and(serde_json::Value::is_object) && scheme_ref.is_none() {
+        return Err(format!("{} is not an IntelliJ theme: it has no \"ui\" or \"editorScheme\"", path.display()));
+    }
+    let editor_scheme = scheme_ref
+        .and_then(|p| Path::new(p).file_name().map(|n| path.with_file_name(n)))
         .filter(|p| p.is_file())
         .map(|p| read_file(&p).map(|b| text(&b)))
         .transpose()?;
     let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let id = file.strip_suffix(".theme.json").or_else(|| file.strip_suffix(".json")).unwrap_or(&file).to_owned();
-    let value: serde_json::Value = serde_json::from_str(&theme).unwrap_or_default();
-    let field = |k: &str| value.get(k).and_then(|v| v.as_str()).map(str::to_owned);
     Ok(IntellijThemeSource {
-        name: field("name").unwrap_or_else(|| id.clone()),
+        name: string_field(&fields, "name").map_or_else(|| id.clone(), str::to_owned),
         plugin_id: None,
         version: None,
-        vendor: field("author"),
+        vendor: string_field(&fields, "author").map(str::to_owned),
         themes: vec![IntellijThemeFile { id, theme, editor_scheme }],
     })
 }
 
-/// The theme JSON, comments removed, if it is an object.
-fn theme_json(bytes: &[u8]) -> Result<String, String> {
+type JsonObject = serde_json::Map<String, serde_json::Value>;
+
+/// The theme JSON, comments removed, and its fields, if it is an object.
+fn theme_json(bytes: &[u8]) -> Result<(String, JsonObject), String> {
     let json = super::theme::strip_json_comments(&text(bytes));
     match serde_json::from_str::<serde_json::Value>(&json) {
-        Ok(serde_json::Value::Object(_)) => Ok(json),
+        Ok(serde_json::Value::Object(fields)) => Ok((json, fields)),
         Ok(_) => Err("not a theme: expected a JSON object".into()),
         Err(e) => Err(format!("invalid theme JSON: {e}")),
     }
 }
 
-fn editor_scheme_ref(theme: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(theme).ok()?;
-    value.get("editorScheme")?.as_str().filter(|s| !s.trim().is_empty()).map(str::to_owned)
+fn string_field<'a>(fields: &'a JsonObject, key: &str) -> Option<&'a str> {
+    fields.get(key)?.as_str().filter(|s| !s.trim().is_empty())
 }
 
 /// `/themes/x.theme.json` → `themes/x.theme.json`.
@@ -211,15 +219,33 @@ fn plugin_jars(path: &Path) -> Result<Vec<Jar>, String> {
     if archive.index_for_name(PLUGIN_XML).is_some() {
         return Ok(vec![archive]);
     }
-    let mut nested: Vec<String> = entry_names(&archive).into_iter().filter(|n| is_lib_jar(n)).collect();
-    nested.sort();
-    let mut jars = Vec::new();
-    for name in nested.iter().take(MAX_JARS) {
-        let Some(bytes) = read_entry(&mut archive, name, MAX_JAR)? else { continue };
-        let reader: Box<dyn ReadSeek> = Box::new(Cursor::new(bytes));
-        jars.push(zip::ZipArchive::new(reader).map_err(|e| format!("{name} is not a jar ({e})"))?);
-    }
+    let jars = nested_jars(&mut archive, MAX_JAR, MAX_NESTED);
     if jars.is_empty() { Err(not_plugin()) } else { Ok(jars) }
+}
+
+/// The `lib` jars of a Marketplace zip, smallest first (a theme's own jar is small)
+/// while they fit `max_total`; library jars too large or not jars at all are skipped.
+fn nested_jars(archive: &mut Jar, max_jar: u64, max_total: u64) -> Vec<Jar> {
+    let mut nested: Vec<(u64, String)> = entry_names(archive)
+        .into_iter()
+        .filter(|n| is_lib_jar(n))
+        .filter_map(|n| Some((archive.by_name(&n).ok()?.size(), n)))
+        .filter(|(size, _)| *size <= max_jar)
+        .collect();
+    nested.sort();
+    let (mut jars, mut loaded) = (Vec::new(), 0u64);
+    for (size, name) in nested.into_iter().take(MAX_JARS) {
+        if loaded.saturating_add(size) > max_total {
+            break;
+        }
+        let Ok(Some(bytes)) = read_entry(archive, &name, max_jar) else { continue };
+        loaded += size;
+        let reader: Box<dyn ReadSeek> = Box::new(Cursor::new(bytes));
+        if let Ok(jar) = zip::ZipArchive::new(reader) {
+            jars.push(jar);
+        }
+    }
+    jars
 }
 
 fn entry_names(jar: &Jar) -> Vec<String> {
@@ -248,7 +274,7 @@ fn read_entry(jar: &mut Jar, name: &str, max: u64) -> Result<Option<Vec<u8>>, St
         return Err(format!("{name} is too large"));
     }
     let mut buf = Vec::with_capacity(file.size() as usize);
-    file.take(max + 1).read_to_end(&mut buf).map_err(|e| format!("{name}: {e}"))?;
+    file.take(max.saturating_add(1)).read_to_end(&mut buf).map_err(|e| format!("{name}: {e}"))?;
     if buf.len() as u64 > max {
         return Err(format!("{name} is too large"));
     }
@@ -275,32 +301,36 @@ struct Descriptor {
     themes: Vec<(String, String)>,
 }
 
-/// Reads `META-INF/plugin.xml` and the descriptors it includes (other `META-INF/*.xml`).
+/// Reads `META-INF/plugin.xml` and the descriptors it includes (`<xi:include href>`), in any jar.
 fn descriptor(jars: &mut [Jar]) -> Result<Descriptor, String> {
+    let main = find(jars, PLUGIN_XML, MAX_FILE)
+        .ok()
+        .flatten()
+        .ok_or_else(|| format!("not an IntelliJ plugin: no {PLUGIN_XML}"))?;
     let mut out = Descriptor::default();
-    let mut main = false;
-    for jar in jars.iter_mut() {
-        let mut names: Vec<String> = entry_names(jar)
-            .into_iter()
-            .filter(|n| n.strip_prefix("META-INF/").is_some_and(|f| !f.contains('/') && f.ends_with(".xml")))
-            .collect();
-        names.sort_by_key(|n| n != PLUGIN_XML);
-        for name in names {
-            let is_main = name == PLUGIN_XML && !main;
-            let Ok(Some(bytes)) = read_entry(jar, &name, MAX_FILE) else { continue };
-            match parse_descriptor(&text(&bytes), is_main, &mut out) {
-                Ok(()) => main |= is_main,
-                Err(e) if is_main => return Err(format!("{PLUGIN_XML}: {e}")),
-                Err(_) => {}
-            }
+    let mut includes = Vec::new();
+    parse_descriptor(&text(&main), true, &mut out, &mut includes).map_err(|e| format!("{PLUGIN_XML}: {e}"))?;
+    let mut read = std::collections::HashSet::from([PLUGIN_XML.to_owned()]);
+    while let Some(href) = includes.pop() {
+        let name = include_entry(&href);
+        if read.len() >= MAX_DESCRIPTORS || !read.insert(name.clone()) {
+            continue;
         }
+        let Ok(Some(bytes)) = find(jars, &name, MAX_FILE) else { continue };
+        let _ = parse_descriptor(&text(&bytes), false, &mut out, &mut includes);
     }
     let mut seen = std::collections::HashSet::new();
     out.themes.retain(|(id, _)| seen.insert(id.clone()));
-    if main { Ok(out) } else { Err(format!("not an IntelliJ plugin: no {PLUGIN_XML}")) }
+    Ok(out)
 }
 
-fn parse_descriptor(xml: &str, main: bool, out: &mut Descriptor) -> Result<(), String> {
+/// An `<xi:include href>` as a jar entry: `/META-INF/x.xml` from the jar's root, `x.xml` beside plugin.xml.
+fn include_entry(href: &str) -> String {
+    let href = href.trim();
+    href.strip_prefix('/').map_or_else(|| format!("META-INF/{href}"), str::to_owned)
+}
+
+fn parse_descriptor(xml: &str, main: bool, out: &mut Descriptor, includes: &mut Vec<String>) -> Result<(), String> {
     let mut reader = Reader::from_str(xml);
     let mut stack: Vec<String> = Vec::new();
     let mut text = String::new();
@@ -309,6 +339,12 @@ fn parse_descriptor(xml: &str, main: bool, out: &mut Descriptor) -> Result<(), S
         match event {
             Event::Start(ref tag) | Event::Empty(ref tag) => {
                 let name = tag.local_name().as_ref().to_owned();
+                if name == "include" {
+                    let href = tag.attributes().flatten().find(|a| a.key.local_name().as_ref() == "href");
+                    if let Some(href) = href.and_then(|a| a.normalized_value(XmlVersion::Implicit1_0).ok()) {
+                        includes.push(href.into_owned());
+                    }
+                }
                 if name == "themeProvider" {
                     let (mut id, mut path) = (None, None);
                     for a in tag.attributes() {
@@ -507,16 +543,15 @@ fn find_installed(ides: &[IdeDir]) -> Vec<InstalledIntellijTheme> {
             let Ok(found) = descriptor(&mut jars) else { continue };
             for (id, path) in &found.themes {
                 let Ok(Some(bytes)) = find(&mut jars, entry_name(path), MAX_FILE) else { continue };
-                let Ok(theme) = theme_json(&bytes) else { continue };
-                let value: serde_json::Value = serde_json::from_str(&theme).unwrap_or_default();
+                let Ok((_, fields)) = theme_json(&bytes) else { continue };
                 let file = || plugin.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 out.push(InstalledIntellijTheme {
                     ide: ide.label.clone(),
                     plugin: found.name.clone().unwrap_or_else(file),
                     path: plugin.clone().into(),
                     theme_id: id.clone(),
-                    theme_name: value.get("name").and_then(|v| v.as_str()).unwrap_or(id).to_owned(),
-                    dark: value.get("dark").and_then(|v| v.as_bool()).unwrap_or(true),
+                    theme_name: string_field(&fields, "name").unwrap_or(id).to_owned(),
+                    dark: fields.get("dark").and_then(serde_json::Value::as_bool).unwrap_or(true),
                     active: active.contains(id),
                 });
             }
@@ -621,6 +656,38 @@ mod tests {
     }
 
     #[test]
+    fn skips_library_jars_it_cannot_or_need_not_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Stored, not deflated: as large in the zip as its content.
+        let mut big = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        big.start_file("lib/Data.class", stored).unwrap();
+        big.write_all(&[b'x'; 8192]).unwrap();
+        let big = big.finish().unwrap().into_inner();
+        let zip = tmp.path().join("DeepSea.zip");
+        write(
+            &zip,
+            &jar_bytes(&[
+                ("DeepSea/lib/a-broken.jar", b"not a jar"),
+                ("DeepSea/lib/b-big.jar", &big),
+                ("DeepSea/lib/deep-sea.jar", &theme_jar()),
+            ]),
+        );
+        assert_eq!(read_source(&zip).unwrap(), expected_source());
+
+        // The broken jar is skipped; a jar over the size limit, or past the total
+        // (smallest first), is not read, while the theme's small jar still is.
+        let mut archive = open_jar(&zip).unwrap();
+        let theme_len = theme_jar().len() as u64;
+        assert_eq!(nested_jars(&mut archive, u64::MAX, u64::MAX).len(), 2);
+        let one = nested_jars(&mut archive, theme_len + 64, u64::MAX);
+        assert_eq!(one.len(), 1);
+        assert!(one[0].index_for_name(PLUGIN_XML).is_some());
+        assert_eq!(nested_jars(&mut archive, u64::MAX, theme_len + 64).len(), 1);
+        assert!(nested_jars(&mut archive, 8, u64::MAX).is_empty());
+    }
+
+    #[test]
     fn reads_a_loose_theme_json_with_the_scheme_beside_it() {
         let tmp = tempfile::tempdir().unwrap();
         let theme = tmp.path().join("DeepSea.theme.json");
@@ -652,6 +719,10 @@ mod tests {
         write(&package, &jar_bytes(&[("plugin.toml", b"id = \"x\"")]));
         assert!(read_source(&package).unwrap_err().message.contains("not an IntelliJ plugin"));
 
+        let other = tmp.path().join("package.json");
+        write(&other, br#"{ "name": "app", "version": "1.0.0" }"#);
+        assert!(read_source(&other).unwrap_err().message.contains("is not an IntelliJ theme"));
+
         let broken = tmp.path().join("broken.theme.json");
         write(&broken, b"{ \"name\": ");
         assert!(read_source(&broken).unwrap_err().message.contains("invalid theme JSON"));
@@ -668,19 +739,27 @@ mod tests {
         let jar = tmp.path().join("split.jar");
         let main = r#"<idea-plugin xmlns:xi="http://www.w3.org/2001/XInclude"><name>Split</name>
             <xi:include href="/META-INF/themes.xml"/></idea-plugin>"#;
-        let part = r#"<idea-plugin><extensions defaultExtensionNs="com.intellij">
-            <themeProvider id="s" path="/s.theme.json"/></extensions><name>Not this</name></idea-plugin>"#;
+        let part = r#"<idea-plugin xmlns:xi="http://www.w3.org/2001/XInclude"><extensions defaultExtensionNs="com.intellij">
+            <themeProvider id="s" path="/s.theme.json"/></extensions><name>Not this</name>
+            <xi:include href="more.xml"/><xi:include href="/META-INF/themes.xml"/></idea-plugin>"#;
+        let more = r#"<idea-plugin><themeProvider id="m" path="/m.theme.json"/></idea-plugin>"#;
+        let unrelated = r#"<idea-plugin><themeProvider id="x" path="/x.theme.json"/></idea-plugin>"#;
         write(
             &jar,
             &jar_bytes(&[
                 ("META-INF/themes.xml", part.as_bytes()),
+                ("META-INF/more.xml", more.as_bytes()),
+                ("META-INF/unrelated.xml", unrelated.as_bytes()),
                 (PLUGIN_XML, main.as_bytes()),
                 ("s.theme.json", br#"{"name":"S"}"#),
+                ("m.theme.json", br#"{"name":"M"}"#),
+                ("x.theme.json", br#"{"name":"X"}"#),
             ]),
         );
         let source = read_source(&jar).unwrap();
         assert_eq!(source.name, "Split");
-        assert_eq!(source.themes.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["s"]);
+        // Only what plugin.xml includes (relative or from the root, once each) counts.
+        assert_eq!(source.themes.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["s", "m"]);
     }
 
     #[test]

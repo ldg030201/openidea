@@ -3,10 +3,11 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import type { PluginInfo } from "@/bindings";
+import type { PluginInfo, ProjectInfo } from "@/bindings";
 import { _setActiveEditor } from "@/editor/api";
 import { executeAction, executeActionFrom, getAction, registerAction } from "@/platform/actions";
 import { useProject } from "@/platform/project";
+import { ContextMenuHost, hideContextMenu } from "@/ui";
 import { provideNotificationService, type NotificationService } from "@/workbench/contributions";
 import { applyThemeAttributes, previewTheme, useThemeOverride } from "@/workbench/theme";
 import { pluginThemeRef } from "@/platform/themes";
@@ -492,6 +493,32 @@ describe("PluginsPage", () => {
     await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(1));
     expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent("Toy Language");
     expect(screen.getByText("Toy (.toy)")).toBeInTheDocument();
+  });
+
+  it("offers the IntelliJ theme imports only in a trusted project's window", async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <PluginsPage />
+        <ContextMenuHost />
+      </>,
+    );
+    const imports = async () => {
+      await user.click(screen.getByRole("button", { name: "Manage Plugins" }));
+      const found = ["Import Theme from IntelliJ IDE…", "Import IntelliJ Theme from File…"].filter((name) =>
+        screen.queryByRole("menuitem", { name }),
+      );
+      act(() => hideContextMenu());
+      return found;
+    };
+    // The welcome screen: the host refuses installs without a trusted project.
+    expect(await imports()).toEqual([]);
+    const project = { trusted: false, root: "/p", name: "p", isGit: false } as unknown as ProjectInfo;
+    act(() => useProject.setState({ project }));
+    expect(await imports()).toEqual([]);
+    act(() => useProject.setState({ project: { ...project, trusted: true } }));
+    expect(await imports()).toHaveLength(2);
+    act(() => useProject.setState({ project: null }));
   });
 
   it("restarts a failed plugin instead of disabling it", async () => {
